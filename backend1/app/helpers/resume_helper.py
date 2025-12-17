@@ -306,105 +306,185 @@ async def evaluate_projects(project_list):
 
     On any error, returns [].
     """
+    print(f"DEBUG: Starting project evaluation. Input type: {type(project_list)}")
+    print(f"DEBUG: Project list content: {project_list}")
 
     if not openrouter_client:
+        print("DEBUG: OpenRouter client not available")
         return []
 
     if not project_list:
+        print("DEBUG: Empty project list provided")
         return []
 
-    # Normalize to a list of simple strings describing each project
+    # Normalize to a list of dictionaries with consistent structure
     normalized_projects = []
-    for p in project_list:
-        if p is None:
+    for i, p in enumerate(project_list, 1):
+        try:
+            if p is None:
+                print(f"⚠️ [WARN] Project {i} is None, skipping")
+                continue
+                
+            project_dict = {
+                "title": "",
+                "description": "",
+                "technologies": [],
+                "details": []
+            }
+            
+            if isinstance(p, dict):
+                # Handle dictionary input
+                project_dict["title"] = str(p.get("title") or p.get("name") or "").strip()
+                project_dict["description"] = str(p.get("description") or p.get("summary") or "").strip()
+                
+                # Handle technologies/tech_stack
+                tech = p.get("technologies") or p.get("tech_stack") or []
+                if isinstance(tech, str):
+                    project_dict["technologies"] = [t.strip() for t in tech.split(",") if t.strip()]
+                elif isinstance(tech, list):
+                    project_dict["technologies"] = [str(t).strip() for t in tech if str(t).strip()]
+                
+                # Handle details/description
+                details = p.get("details")
+                if details:
+                    if isinstance(details, str):
+                        project_dict["details"] = [d.strip() for d in details.split(". ") if d.strip()]
+                    elif isinstance(details, list):
+                        project_dict["details"] = [str(d).strip() for d in details if str(d).strip()]
+                
+            elif isinstance(p, str):
+                # For string input, use it as description and try to extract technologies
+                project_dict["description"] = p.strip()
+                # Simple tech extraction - can be enhanced with more sophisticated parsing
+                tech_keywords = ["python", "django", "react", "node", "java", "ml", "ai", "sql"]
+                project_dict["technologies"] = [tech for tech in tech_keywords if tech in p.lower()]
+            
+            # Ensure we have at least a title or description
+            if not project_dict["title"] and project_dict["description"]:
+                # Use first few words of description as title if title is missing
+                project_dict["title"] = " ".join(project_dict["description"].split()[:5]) + ("..." if len(project_dict["description"].split()) > 5 else "")
+            
+            print(f"✅ [DEBUG] Normalized project {i}: {project_dict['title']}")
+            normalized_projects.append(project_dict)
+            
+        except Exception as e:
+            print(f"⚠️ [WARN] Error normalizing project {i}: {str(e)}")
             continue
-        if isinstance(p, str):
-            text = p.strip()
-        elif isinstance(p, dict):
-            title = str(p.get("title") or p.get("name") or "").strip()
-            desc = str(p.get("description") or p.get("details") or "").strip()
-            tech = p.get("tech_stack") or p.get("technologies") or []
-            if isinstance(tech, list):
-                tech_text = ", ".join(str(t).strip() for t in tech if str(t).strip())
-            else:
-                tech_text = str(tech).strip()
-            parts = [title, desc, tech_text]
-            text = ". ".join(part for part in parts if part)
-        else:
-            text = str(p).strip()
-
-        if text:
-            normalized_projects.append(text)
 
     if not normalized_projects:
         return []
 
-    schema_text = (
-        "[\n"
-        "  {\n"
-        "    \"project_title\": \"\",\n"
-        "    \"summary\": \"\",\n"
-        "    \"technologies\": [],\n"
-        "    \"domain\": \"\",\n"
-        "    \"problem_statement\": \"\",\n"
-        "    \"features\": [],\n"
-        "    \"impact\": \"\",\n"
-        "    \"complexity_level\": \"Beginner | Intermediate | Advanced\",\n"
-        "    \"relevance_score\": 0,\n"
-        "    \"missing_points\": [],\n"
-        "    \"recommended_improvements\": [],\n"
-        "    \"role_mapping\": []\n"
-        "  }\n"
-        "]"
-    )
-
+    # Build a more structured prompt with clear examples
     prompt = (
-        "You are evaluating student projects from a fresher resume for industry hiring. "
-        "For EACH project text below, extract and evaluate using this STRICT JSON schema only (no extra keys, no comments, no markdown):\n\n"
-        f"{schema_text}\n\n"
-        "Field rules:\n"
-        "- technologies must be a list of tools/languages/frameworks detected from the project text.\n"
-        "- domain must be one of: [\"Web Development\", \"AI/ML\", \"Cloud\", \"Full Stack\", \"Mobile App\", \"IoT\", \"Cybersecurity\", \"Data Science\", \"Automation\", \"Other\"].\n"
-        "- complexity_level must be based on depth of stack, integrations, and features.\n"
-        "- relevance_score is an integer between 0 and 100 based on industry usefulness for fresher hiring.\n"
-        "- missing_points should include items like: \"No GitHub link\", \"No deployment link\", \"Weak problem statement\", \"No measurable achievements\" when applicable.\n"
-        "- role_mapping should be a list of suitable job roles such as: [\"Full Stack Developer\", \"Backend Developer\", \"Frontend Developer\", \"ML Engineer\", \"Cloud Engineer\", \"Data Analyst\", \"DevOps Engineer\", \"Software Engineer\"].\n\n"
-        "Return JSON ONLY as an array where each element corresponds to each project in the same order as provided.\n\n"
-        f"Projects: {json.dumps(normalized_projects)}"
+        "You are a senior technical recruiter evaluating student projects. For each project below, provide a detailed analysis "
+        "following this JSON schema. Be thorough but concise in your evaluation.\n\n"
+        "For each project, analyze and provide:\n"
+        "1. A clear project title (if not provided, create one based on the description)\n"
+        "2. A concise summary (2-3 sentences)\n"
+        "3. List of all technologies used (programming languages, frameworks, tools)\n"
+        "4. Primary domain (choose from: Web Development, AI/ML, Cloud, Full Stack, Mobile App, IoT, Cybersecurity, Data Science, Automation, Other)\n"
+        "5. Problem statement (what problem does this project solve?)\n"
+        "6. Key features (bullet points)\n"
+        "7. Impact/Results (quantify if possible, e.g., 'Improved performance by 40%')\n"
+        "8. Complexity level (Beginner, Intermediate, or Advanced)\n"
+        "9. Relevance score (0-100) for fresher hiring\n"
+        "10. Missing points (e.g., 'No GitHub link', 'No deployment', 'Lacks metrics')\n"
+        "11. Recommended improvements\n"
+        "12. Suitable job roles\n\n"
+        "Example output for a project:\n"
+        "{\n"
+        "  \"project_title\": \"E-commerce Website\",\n"
+        "  \"summary\": \"Developed a full-stack e-commerce platform with user authentication and payment integration.\",\n"
+        "  \"technologies\": [\"React\", \"Node.js\", \"MongoDB\", \"Express\"],\n"
+        "  \"domain\": \"Web Development\",\n"
+        "  \"problem_statement\": \"Small businesses need an affordable way to sell products online.\",\n"
+        "  \"features\": [\"User authentication\", \"Product catalog\", \"Shopping cart\", \"Payment processing\"],\n"
+        "  \"impact\": \"Enabled small businesses to go online, resulting in 30% increased sales.\",\n"
+        "  \"complexity_level\": \"Intermediate\",\n"
+        "  \"relevance_score\": 85,\n"
+        "  \"missing_points\": [\"No link to live demo\", \"Lacks test coverage\"],\n"
+        "  \"recommended_improvements\": [\"Add unit tests\", \"Implement CI/CD\", \"Add responsive design for mobile\"],\n"
+        "  \"role_mapping\": [\"Full Stack Developer\", \"Frontend Developer\", \"Web Developer\"]\n"
+        "}\n\n"
+        "Now evaluate these projects (maintain the same order):\n"
+        f"{json.dumps(normalized_projects, indent=2)}\n\n"
+        "Return a JSON array of your evaluations. Do not include any other text or markdown formatting."
     )
 
     try:
+        print("🤖 [DEBUG] Sending project evaluation request to OpenRouter...")
+        print(f"📝 [DEBUG] Prompt length: {len(prompt)} characters")
+        
+        # Make the API call
         response = openrouter_client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": "Return JSON only. Do not include commentary or markdown fences.",
+                    "content": "You are a helpful assistant that evaluates technical projects. Return a valid JSON array of project evaluations.",
                 },
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
-            max_tokens=800,
+            max_tokens=3000,  # Increased to handle larger responses
+            response_format={"type": "json_object"},
+            timeout=30  # 30 second timeout
         )
+        
         raw = response.choices[0].message.content or ""
-    except Exception as exc:
-        print("⚠️ Project evaluation LLM call failed:", exc)
-        return []
-
-    raw_clean = raw.strip().replace("```json", "").replace("```", "").strip()
-
-    try:
+        print(f"✅ [DEBUG] Received response from OpenRouter (length: {len(raw)})")
+        
+        # Clean the response
+        raw_clean = raw.strip()
+        
+        # Try to extract JSON if it's wrapped in markdown code blocks
+        if "```json" in raw_clean:
+            raw_clean = raw_clean.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw_clean:
+            raw_clean = raw_clean.split("```")[1].split("```")[0].strip()
+        
+        print(f"🔍 [DEBUG] Raw LLM response (first 500 chars): {raw_clean[:500]}...")
+        
+        # Parse the JSON response
         parsed = json.loads(raw_clean)
+        
+        # Handle different response formats
+        if isinstance(parsed, dict):
+            if "projects" in parsed:
+                items = parsed["projects"]
+            elif "results" in parsed:
+                items = parsed["results"]
+            elif any(k in parsed for k in ["project_title", "summary", "technologies"]):
+                # If it's a single project object, wrap it in a list
+                items = [parsed]
+            else:
+                # Try to find an array in the response
+                items = next((v for v in parsed.values() if isinstance(v, list)), [])
+        elif isinstance(parsed, list):
+            items = parsed
+        else:
+            raise ValueError(f"Unexpected response format: {type(parsed).__name__}")
+            
+        if not isinstance(items, list):
+            raise ValueError(f"Expected list of projects, got {type(items).__name__}")
+            
+        print(f"✅ [DEBUG] Successfully parsed {len(items)} projects")
+        
+    except json.JSONDecodeError as je:
+        print(f"❌ [ERROR] Failed to parse JSON from LLM: {str(je)}")
+        print(f"📄 [DEBUG] Raw response start: {raw_clean[:500]}...")
+        if len(raw_clean) > 500:
+            print(f"📄 [DEBUG] Raw response end: ...{raw_clean[-500:]}")
+        return []
     except Exception as exc:
-        print("⚠️ Project evaluation JSON parse failed:", exc, "Raw:", raw_clean[:300])
+        print(f"❌ [ERROR] Project evaluation failed: {str(exc)}")
+        import traceback
+        print(f"📜 Stack trace: {traceback.format_exc()}")
         return []
 
-    if isinstance(parsed, dict) and "results" in parsed:
-        items = parsed.get("results", [])
-    else:
-        items = parsed
-
+    # Ensure we have a valid list of projects
     if not isinstance(items, list):
+        print(f"⚠️ [WARN] Expected list of projects, got {type(items).__name__}")
         return []
 
     allowed_domains = {
@@ -596,7 +676,9 @@ Resume text:
                 max_tokens=1500,
             )
             ai_output = response.choices[0].message.content
+            print(f"DEBUG: Raw AI output: {ai_output}")  # Debug log for raw AI output
         except Exception as exc:
+            print(f"DEBUG: AI request failed: {str(exc)}")
             return {"error": f"AI request failed: {str(exc)}"}
 
         # ---- Parse JSON ----
@@ -613,12 +695,15 @@ Resume text:
             cert_analysis = []
         data["certificate_analysis"] = cert_analysis
 
-        # ---- Project evaluation (LLM) ----
-        project_list = data.get("projects", []) or []
-        project_analysis = await evaluate_projects(project_list)
-        if not isinstance(project_analysis, list):
-            project_analysis = []
-        data["project_analysis"] = project_analysis
+        # Process projects if any
+        projects = []
+        if "projects" in data and data["projects"]:
+            print(f"DEBUG: Found projects in resume data: {data['projects']}")  # Debug log
+            projects = await evaluate_projects(data["projects"])
+            print(f"DEBUG: Evaluated projects: {projects}")  # Debug log
+        else:
+            print("DEBUG: No projects found in resume data")  # Debug log
+        data["project_analysis"] = projects
 
         # ---- Technical skills post-processing ----
         # Clean the skills block minimally so that:
